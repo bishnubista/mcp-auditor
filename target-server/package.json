@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "start": "bun run src/index.ts",
+    "http": "bun run src/http.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

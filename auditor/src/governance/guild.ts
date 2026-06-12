@@ -1,60 +1,148 @@
-// Guild AI governance backend — STUB.
+// Guild AI (Harness) governance backend — REAL implementation.
 //
-// >>> WIRE REAL GUILD SDK HERE IF TIME PERMITS <<<
+// Guild AI in this hackathon is the agent-governance / control-plane sponsor:
+// it permissions which MCP servers/tools each prober may touch and records an
+// audit trail of every probe. This backend is the AUDIT SINK side — it ships
+// every governance event (allowed AND denied) to the Guild API.
 //
-// This implements the same GovernanceBackend interface as LocalGovernance so it
-// is a drop-in replacement for the audit sink. In the demo, governance = Guild AI
-// (Harness): permissioning which MCP servers/tools each prober may touch + an
-// audit trail of every probe.
+// It implements the same GovernanceBackend interface as LocalGovernance, so it
+// is a drop-in replacement. The permission/allowlist gate itself lives in
+// index.ts (the funnel) and is unchanged by this file.
 //
-// Behavior contract for the hackathon:
-//   - constructor takes { apiKey, projectId }.
-//   - audit() throws NotImplemented UNLESS env GUILD_API_KEY is set.
-//   - When GUILD_API_KEY IS set, we still log locally (never lose the trail) and
-//     console.log exactly WHAT WOULD BE SENT to Guild — no real network call yet.
+// DESIGN NOTES (read before changing):
+//   - No first-party Guild TS/bun SDK is cleanly installable as of this build
+//     (npm `guild-ai` is a 357-byte unrelated placeholder; the governance
+//     sponsor ships no public @guildai/* SDK). So we talk to a REST endpoint
+//     with the built-in `fetch` — zero new dependencies, matching local.ts.
+//   - Guild's current public CLI API exposes session events, not a generic
+//     audit-ingest endpoint. When GUILD_SESSION_ID is set, this backend posts
+//     each audit entry into that session:
+//       POST  ${GUILD_API_URL}/sessions/${GUILD_SESSION_ID}/events
+//       Body: { mode: "json", content: { projectId, source, event } }
+//   - Fallback assumed REST contract (one-line change if the real endpoint exists):
+//       POST  ${GUILD_API_URL}/audit
+//       Headers: Authorization: Bearer ${GUILD_API_KEY}
+//                Content-Type: application/json
+//                X-Guild-Project: ${GUILD_PROJECT_ID}   (when set)
+//       Body:    { projectId, source: "mcp-auditor", event: <AuditEntry> }
+//   - The Guild POST is FIRE-AND-FORGET with a hard timeout: the demo must never
+//     block or crash on a slow/failed network call. Every event is ALSO mirrored
+//     to the local audit.jsonl so the on-stage trail exists regardless.
+//   - The key is read from env ONLY — never hardcoded, never committed.
 //
-// node:fs only (via LocalGovernance) — no external dependencies.
+// node:fs only (via LocalGovernance) + built-in fetch/AbortController.
 
 import type { AuditEntry, GovernanceBackend } from "./index.ts";
 import { LocalGovernance } from "./local.ts";
 
 export interface GuildConfig {
   apiKey?: string;
+  apiUrl?: string;
   projectId?: string;
+  sessionId?: string;
 }
+
+// Guild CLI `doctor` reports this as the current API server.
+const DEFAULT_GUILD_API_URL = "https://app.guild.ai/api";
+// Path the AuditEntry is POSTed to. If Guild uses "/events", change this line.
+const GUILD_AUDIT_PATH = "/audit";
+// Network calls are fire-and-forget but bounded so the demo never hangs.
+const GUILD_TIMEOUT_MS = 3000;
 
 export class GuildGovernance implements GovernanceBackend {
   private readonly apiKey: string | undefined;
+  private readonly apiUrl: string;
   private readonly projectId: string | undefined;
-  // Mirror every event locally so the audit trail is never lost while the real
-  // Guild SDK is unwired.
+  private readonly sessionId: string | undefined;
+  // Mirror every event locally so the audit trail is never lost even if the
+  // Guild network call is slow or fails.
   private readonly local: LocalGovernance;
 
-  constructor(config: GuildConfig = {}, localBackend: LocalGovernance = new LocalGovernance()) {
+  constructor(
+    config: GuildConfig = {},
+    localBackend: LocalGovernance = new LocalGovernance(),
+  ) {
     this.apiKey = config.apiKey ?? process.env.GUILD_API_KEY;
+    this.apiUrl = (
+      config.apiUrl ??
+      process.env.GUILD_API_URL ??
+      DEFAULT_GUILD_API_URL
+    ).replace(/\/+$/, "");
     this.projectId = config.projectId ?? process.env.GUILD_PROJECT_ID;
+    this.sessionId = config.sessionId ?? process.env.GUILD_SESSION_ID;
     this.local = localBackend;
   }
 
+  /**
+   * Records a governance event. The local mirror is written SYNCHRONOUSLY first
+   * (so the on-stage audit.jsonl is always complete and ordered), then the Guild
+   * POST is launched fire-and-forget with a timeout. This method NEVER throws
+   * into the demo path: a missing key degrades to local-only, and any network
+   * error is caught and logged to stderr.
+   */
   audit(entry: AuditEntry): void {
-    if (!this.apiKey) {
-      throw new Error(
-        "GuildGovernance not implemented: set GUILD_API_KEY (or pass apiKey) to use the Guild backend stub.",
-      );
-    }
-
-    // Always preserve the local trail first.
+    // 1. Always preserve the durable local trail first — this is what the demo
+    //    reads, so it must succeed even when Guild is unreachable or unset.
     this.local.audit(entry);
 
-    // STUB: in the real integration, replace this with a Guild SDK call, e.g.
-    //   await guild.events.record({ projectId: this.projectId, ...entry })
-    const wouldSend = {
-      destination: "guild-ai",
-      projectId: this.projectId ?? "<unset>",
+    // 2. No key → local-only, never throw. This backend is opt-in: the funnel
+    //    defaults to LocalGovernance, so an unconfigured Guild backend simply
+    //    behaves like the local one rather than breaking the demo path.
+    if (!this.apiKey) {
+      return;
+    }
+
+    // 3. Key present → ship to Guild AI. Fire-and-forget: we do not await here so
+    //    a slow Guild API cannot stall the prober fan-out. Errors are swallowed
+    //    to stderr; the local mirror is the source of truth for the demo.
+    void this.sendToGuild(entry);
+  }
+
+  private async sendToGuild(entry: AuditEntry): Promise<void> {
+    const url = this.sessionId
+      ? `${this.apiUrl}/sessions/${encodeURIComponent(this.sessionId)}/events`
+      : `${this.apiUrl}${GUILD_AUDIT_PATH}`;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${this.apiKey}`,
+    };
+    if (this.projectId && !this.sessionId) headers["X-Guild-Project"] = this.projectId;
+
+    const event = {
+      projectId: this.projectId ?? null,
+      source: "mcp-auditor",
       event: entry,
     };
-    console.log(
-      `[guild:STUB] WOULD send audit event to Guild AI -> ${JSON.stringify(wouldSend)}`,
+    const body = JSON.stringify(
+      this.sessionId ? { mode: "json", content: event } : event,
     );
+
+    // On-stage "governance is live" proof: show exactly what is being shipped.
+    console.log(
+      `[guild] -> POST ${url} ${entry.verdict.toUpperCase()} ${entry.agent} ${entry.tool} ${entry.safeT} (payload ${entry.payloadHash})`,
+    );
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), GUILD_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers,
+        body,
+        signal: controller.signal,
+      });
+      console.error(`[guild] audit -> ${res.status} ${res.statusText}`);
+    } catch (err) {
+      const msg =
+        err instanceof Error && err.name === "AbortError"
+          ? `timeout after ${GUILD_TIMEOUT_MS}ms`
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      // Degrade gracefully: the local mirror already holds this event.
+      console.error(`[guild] audit -> FAILED (${msg}); mirrored locally`);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }

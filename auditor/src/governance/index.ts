@@ -105,16 +105,24 @@ export async function executeProbe(
   }
   probeCounts.set(key, used + 1);
 
-  // 4. Allowed — invoke the target tool through the single permitted path.
+  // 4. Allowed — AUDIT BEFORE DISPATCH (integrity invariant).
+  //
+  // The single audit entry is written BEFORE callTool is invoked. The verdict is
+  // already decided (allowed) at this point, so the trail is complete the moment
+  // the gate opens: a crash AFTER invoke but BEFORE we returned can never leave an
+  // un-audited probe. There is EXACTLY ONE audit entry per probe — we do NOT write
+  // a second "completion" entry (demo:local asserts exactly 6 audit lines), so a
+  // subsequent tool-call error is surfaced in the RETURNED result only, never as a
+  // second audit line.
+  backend.audit({ ...base, verdict: "allowed", reason: "ok" });
+
   try {
     const result = await callTool(req.tool, req.payload);
-    backend.audit({ ...base, verdict: "allowed", reason: "ok" });
     return { verdict: "allowed", result, reason: "ok" };
   } catch (err) {
     const reason = `tool-error:${err instanceof Error ? err.message : String(err)}`;
-    // The probe WAS permitted; the target tool threw. Audit as allowed so the
-    // governance trail reflects that the gate let it through; surface the error.
-    backend.audit({ ...base, verdict: "allowed", reason });
+    // The probe WAS already permitted AND audited above. The target tool threw;
+    // surface the error in the returned result WITHOUT writing a second audit line.
     return { verdict: "allowed", reason };
   }
 }

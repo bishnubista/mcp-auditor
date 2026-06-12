@@ -68,8 +68,14 @@ export class McpClient {
 
   /**
    * Invoke a target tool. Returns the raw SDK result (content array + isError).
-   * The governance executor is the intended caller's caller — this stays a thin
-   * transport primitive with no policy of its own.
+   *
+   * FUNNEL INVARIANT (governance integrity): this stays a thin transport
+   * primitive with NO policy of its own. It is public ONLY so the orchestrator
+   * can wire it as the single `callTool` primitive handed INTO the governance
+   * funnel (executeProbe). Probers must NEVER call this directly — they receive
+   * a CallToolFn that is only ever invoked from inside executeProbe(). This is
+   * enforced statically by the funnel guard in scripts/demo-local.ts, which fails
+   * the gate if any file under src/probers/** invokes `.callTool(` itself.
    */
   async callTool(name: string, args: unknown): Promise<ToolCallResult> {
     const res = await this.client.callTool({

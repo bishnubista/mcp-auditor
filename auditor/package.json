@@ -7,6 +7,10 @@
     "orchestrate": "bun run src/orchestrator.ts --",
     "audit:fixture": "bun run src/orchestrator.ts -- bun run test/fixture-server.ts",
     "synthesize": "bun run src/synthesizer.ts",
+    "file-report": "bun run src/actions/composio.ts",
+    "publish:cited": "bun run src/actions/cited.ts",
+    "dashboard": "bun run src/store/clickhouse.ts",
+    "serve:x402": "bun run src/service/x402-audit-server.ts",
     "typecheck": "bunx tsc --noEmit"
   },
   "devDependencies": {
@@ -16,6 +20,7 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@clickhouse/client": "^1.20.0",
     "@composio/core": "^0.10.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^4.4.3"
