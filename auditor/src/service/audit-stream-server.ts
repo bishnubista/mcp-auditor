@@ -818,7 +818,43 @@ const PAY_TO =
   process.env.PAY_TO_ADDRESS ?? "0x8430154a89111f27cd1bb2f1a3f81961b04391a8";
 const USDC_ASSET = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"; // base-sepolia USDC
 
+// Cash App rail config. Stored WITHOUT the leading $ (render "$" + tag when
+// displaying). Same $0.10 price as the exact rail.
+const CASHAPP_CASHTAG = (process.env.CASHAPP_CASHTAG ?? "mcpauditor").replace(
+  /^\$+/,
+  "",
+);
+
+// One-shot Cash App payment notes. Every 402 mints AUDIT-<nonce> using the same
+// idiom as the other ids here (monotonic counter + short sha — never
+// Date.now()/Math.random()); the gate consumes a note exactly once so a paid
+// screenshot/note can't be replayed for a second audit. Capped FIFO so an
+// attacker hammering 402s can't grow memory unboundedly.
+const ISSUED_NOTES_CAP = 1000;
+const issuedNotes = new Set<string>();
+const issuedNoteOrder: string[] = [];
+let noteCounter = 0;
+
+function mintPaymentNote(): string {
+  const n = ++noteCounter;
+  const h = createHash("sha256")
+    .update(`note:${n}:${CASHAPP_CASHTAG}:${SERVER_ID}`)
+    .digest("hex")
+    .slice(0, 8);
+  const note = `AUDIT-${String(n).padStart(4, "0")}-${h}`;
+  issuedNotes.add(note);
+  issuedNoteOrder.push(note);
+  while (issuedNoteOrder.length > ISSUED_NOTES_CAP) {
+    const oldest = issuedNoteOrder.shift();
+    if (oldest) issuedNotes.delete(oldest);
+  }
+  return note;
+}
+
 function paymentRequirements(resource: string) {
+  // Mint a fresh one-shot note per 402 so the Cash App retry is bound to THIS
+  // challenge (reused/foreign notes are rejected at the gate).
+  const note = mintPaymentNote();
   return {
     x402Version: X402_VERSION,
     error: "X-PAYMENT header required to start an audit",
@@ -836,19 +872,64 @@ function paymentRequirements(resource: string) {
         asset: USDC_ASSET,
         extra: { name: "USDC", version: "2" },
       },
+      {
+        scheme: "cashapp",
+        network: "cashapp",
+        maxAmountRequired: PRICE_ATOMIC,
+        resource,
+        description: `Pay $0.10 via Cash App to $${CASHAPP_CASHTAG} — include payment note ${note}`,
+        mimeType: "application/json",
+        payTo: `$${CASHAPP_CASHTAG}`,
+        maxTimeoutSeconds: 600,
+        asset: "USD",
+        extra: {
+          paymentNote: note,
+          payUrl: `https://cash.app/$${CASHAPP_CASHTAG}/0.10`,
+        },
+      },
     ],
   };
 }
 
 // Gate decision for POST /audits. Mirrors x402-audit-server's rule:
-//   - no X-PAYMENT             -> 402 (always)
-//   - X-PAYMENT: demo (+flag)  -> accept (X402_DEMO_ACCEPT=1)
-//   - demo header w/o flag     -> 402 (bypass closed)
-//   - any other X-PAYMENT      -> accept (P1: no remote facilitator wired here;
-//                                 real verify/settle is x402-audit-server's job)
+//   - no X-PAYMENT               -> 402 (always)
+//   - X-PAYMENT: demo (+flag)    -> accept (X402_DEMO_ACCEPT=1)
+//   - demo header w/o flag       -> 402 (bypass closed)
+//   - cashapp header (+flag)     -> accept if note matches one we issued
+//                                   (one-shot); operator-trust — see below
+//   - cashapp header w/o flag    -> 402 (bypass closed, same as demo)
+//   - any other X-PAYMENT        -> accept (P1: no remote facilitator wired here;
+//                                   real verify/settle is x402-audit-server's job)
 type GateResult =
-  | { ok: true; mode: "demo" | "paid" }
+  | { ok: true; mode: "demo" | "paid" | "cashapp" }
   | { ok: false; status: number; body: unknown };
+
+// Parse a base64(JSON) X-PAYMENT header into the cashapp shape, or null if it
+// isn't one. Never throws — non-base64/non-JSON headers just fall through to
+// the existing non-demo rejection path.
+function parseCashappPayment(
+  raw: string,
+): { note: string; payerCashtag: string } | null {
+  try {
+    const decoded = JSON.parse(
+      Buffer.from(raw, "base64").toString("utf8"),
+    ) as {
+      scheme?: unknown;
+      payload?: { note?: unknown; payerCashtag?: unknown };
+    };
+    if (!decoded || typeof decoded !== "object") return null;
+    if (decoded.scheme !== "cashapp") return null;
+    return {
+      note: typeof decoded.payload?.note === "string" ? decoded.payload.note : "",
+      payerCashtag:
+        typeof decoded.payload?.payerCashtag === "string"
+          ? decoded.payload.payerCashtag
+          : "(unknown)",
+    };
+  } catch {
+    return null;
+  }
+}
 
 function x402Gate(req: Request, resource: string): GateResult {
   const raw = (req.headers.get(PAYMENT_HEADER) ?? "").trim();
@@ -871,6 +952,42 @@ function x402Gate(req: Request, resource: string): GateResult {
     }
     return { ok: true, mode: "demo" };
   }
+
+  // Cash App rail. SECURITY: Cash App P2P payments have NO API-verifiable
+  // receipt, so this rail is OPERATOR-TRUST only — it is honored solely under
+  // the SAME X402_DEMO_ACCEPT=1 flag that gates `demo` (never silently), and
+  // the presented note must be one THIS server minted, consumed one-shot.
+  const cashapp = parseCashappPayment(raw);
+  if (cashapp) {
+    if (!demoAccept) {
+      return {
+        ok: false,
+        status: 402,
+        body: {
+          ...paymentRequirements(resource),
+          error:
+            "cashapp payment header presented but X402_DEMO_ACCEPT is not set (bypass closed — cashapp is operator-trust mode, no API verification)",
+        },
+      };
+    }
+    if (cashapp.note.length === 0 || !issuedNotes.has(cashapp.note)) {
+      return {
+        ok: false,
+        status: 402,
+        body: {
+          ...paymentRequirements(resource),
+          error:
+            "cashapp payment note missing, not issued by this server, or already used (notes are one-shot; re-request to mint a fresh AUDIT-<nonce>)",
+        },
+      };
+    }
+    issuedNotes.delete(cashapp.note); // one-shot: a note can mint exactly one audit
+    console.error(
+      `[stream] x402 settlement mode "cashapp (operator-trust, no API verification)" note=${cashapp.note} payer=${cashapp.payerCashtag}`,
+    );
+    return { ok: true, mode: "cashapp" };
+  }
+
   // SECURITY: do NOT treat the mere presence of an X-PAYMENT header as proof of
   // payment (that is a fail-open auth bypass). This streaming server accepts ONLY
   // demo-mode payment; real onchain verify+settle lives in x402-audit-server.ts.
@@ -950,6 +1067,16 @@ async function handle(req: Request): Promise<Response> {
         target: SERVER_ID,
         activeAudits: audits.size,
         demoMode: process.env.X402_DEMO_ACCEPT === "1",
+        x402: {
+          rails: ["exact", "cashapp"],
+          cashapp: {
+            payTo: `$${CASHAPP_CASHTAG}`,
+            // Operator-trust: Cash App P2P has no API-verifiable receipt, so
+            // the rail only settles when the demo flag is set.
+            mode: "operator-trust (no API verification)",
+            enabled: process.env.X402_DEMO_ACCEPT === "1",
+          },
+        },
       },
       200,
     );
@@ -1027,6 +1154,10 @@ async function handle(req: Request): Promise<Response> {
         runId,
         streamToken,
         paymentMode: gate.mode,
+        // Cash App mints are operator-trust settled (no API receipt) — label
+        // them so the operator/frontend can tell the rails apart. Additive
+        // field; the auditId/streamToken contract above is unchanged.
+        ...(gate.mode === "cashapp" ? { settlement: "cashapp" } : {}),
         // The final target label is resolved at run start (admitted host:port for
         // remote, or the seeded id). Echo the initial label; the audit.start
         // event carries the authoritative value.
