@@ -1,0 +1,9 @@
+{
+  "name": "mcp-auditor",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "demo:local": "bun run scripts/demo-local.ts",
+    "typecheck": "cd auditor && bunx tsc --noEmit"
+  }
+}

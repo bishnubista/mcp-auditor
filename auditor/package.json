@@ -1,0 +1,23 @@
+{
+  "name": "auditor",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "orchestrate": "bun run src/orchestrator.ts --",
+    "audit:fixture": "bun run src/orchestrator.ts -- bun run test/fixture-server.ts",
+    "synthesize": "bun run src/synthesizer.ts",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@composio/core": "^0.10.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  }
+}
