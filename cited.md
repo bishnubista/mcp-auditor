@@ -40,10 +40,21 @@
 
 This audit is delivered as a **paid, agent-native API**: an unpaid `POST /audits`
 returns HTTP **402 Payment Required** with x402 payment terms, and the report is
-released only after settlement. The screenshot below shows the x402 payment gate
-in the live auditor UI (priced per audit run):
+released only after settlement.
 
-![x402 payment gate — pay to run a governed MCP audit](https://raw.githubusercontent.com/bishnubista/mcp-auditor/feat/cashapp-x402-paywall/assets/x402-payment.png)
+**Live on-chain settlement (ground-truth proof).** A real x402 charge of
+**0.1 USDC** settled on **Base Sepolia** — verifiable on the public ledger:
+[`0xda0c…02f12`](https://sepolia.basescan.org/tx/0xda0c5b5b77067f87988f36aca33aa78ef7b806a76ea26e54d4de52c9a8302f12)
+(Status: **Success** · Block 42768778 · Jun-12-2026 23:10:44 UTC · USDC contract
+`0x036CbD53842c5426634e7929541eC2318f3dCF7e`).
+
+x402 payment gate in the live auditor UI (priced per audit run):
+
+![x402 payment gate — pay to run a governed MCP audit](https://raw.githubusercontent.com/bishnubista/mcp-auditor/main/assets/x402-payment.png)
+
+On-chain settlement of the x402 charge — 0.1 USDC transfer on Base Sepolia (BaseScan):
+
+![x402 settlement: 0.1 USDC transfer on Base Sepolia, status Success (BaseScan)](https://raw.githubusercontent.com/bishnubista/mcp-auditor/main/assets/x402-tx-basescan.png)
 
 ---
 
