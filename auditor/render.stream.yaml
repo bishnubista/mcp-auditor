@@ -1,0 +1,37 @@
+# render.stream.yaml — Render Blueprint for the LIVE audit-stream-server backend.
+#
+# Deploys the streaming multi-agent audit backend (auditor/src/service/audit-stream-server.ts)
+# as a public Docker web service so the Vercel UI (https://web-bbista.vercel.app) can
+# connect to a real backend instead of mock mode.
+#
+# KEY LAYOUT NOTE
+# ---------------
+# The build context is the REPO ROOT (which contains auditor/ AND target-server/),
+# because the stream server spawns the seeded target at ../../../target-server/src/index.ts
+# relative to itself. The Dockerfile (auditor/Dockerfile) copies BOTH dirs as siblings.
+#
+# Deploy: Render Dashboard -> New -> Blueprint -> point at this repo + this file.
+# Or it is created via the Render REST API by the UI6 deploy agent.
+
+services:
+  - type: web
+    name: mcp-auditor-stream
+    runtime: docker
+    plan: starter
+    branch: feat/ui-live-agent-dashboard
+    # Build context = repo root so the Dockerfile can COPY auditor/ + target-server/.
+    rootDir: .
+    dockerfilePath: auditor/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeploy: false
+    envVars:
+      # x402 demo gate: accept `X-PAYMENT: demo` so the UI can start audits.
+      - key: X402_DEMO_ACCEPT
+        value: "1"
+      # CORS: allow ONLY the Vercel origin (PLAN-UI.md §4).
+      - key: ALLOWED_ORIGIN
+        value: https://web-bbista.vercel.app
+      - key: NODE_ENV
+        value: production
+      # Render injects PORT automatically; the server reads process.env.PORT.
