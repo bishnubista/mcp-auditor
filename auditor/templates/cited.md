@@ -36,6 +36,17 @@
 
 ---
 
+## Monetization — x402 paid access
+
+This audit is delivered as a **paid, agent-native API**: an unpaid `POST /audits`
+returns HTTP **402 Payment Required** with x402 payment terms, and the report is
+released only after settlement. The screenshot below shows the x402 payment gate
+in the live auditor UI (priced per audit run):
+
+![x402 payment gate — pay to run a governed MCP audit](https://raw.githubusercontent.com/bishnubista/mcp-auditor/feat/cashapp-x402-paywall/assets/x402-payment.png)
+
+---
+
 # Findings
 
 {{FINDINGS}}
