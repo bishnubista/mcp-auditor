@@ -45,7 +45,9 @@ const PAYLOAD_ARTIFACT_PATH = process.env.COMPOSIO_PAYLOAD_PATH ?? join(OUT_DIR,
 const ACTION_SLUG = "GITHUB_CREATE_AN_ISSUE";
 /** Keep the issue body well under GitHub's ~65k limit, with margin for the truncation note. */
 const MAX_BODY_CHARS = 60_000;
-const DEFAULT_REPO = "your-org/mcp-audit-reports-PLACEHOLDER";
+const DEFAULT_REPO = "bishnubista/mcp-audit-reports";
+/** Safety rail: live issues may ONLY be filed into a repo with this name. */
+const ALLOWED_REPO_NAME = "mcp-audit-reports";
 
 type Severity = "critical" | "high" | "medium" | "low";
 const SEV_RANK: Record<Severity, number> = { critical: 4, high: 3, medium: 2, low: 1 };
@@ -164,11 +166,11 @@ interface IssueArgs {
 /**
  * Resolve owner/name. Accepts either "owner/name" or a full GitHub URL
  * (https://github.com/owner/name[.git][/]) — normalizes both to owner + repo.
- * On malformed input, falls back to the placeholder repo.
+ * On malformed input, falls back to the default repo.
  */
-function resolveRepo(): { owner: string; repo: string; isPlaceholder: boolean } {
+function resolveRepo(): { owner: string; repo: string; isDefault: boolean } {
   const raw = process.env.COMPOSIO_GITHUB_REPO?.trim();
-  const isPlaceholder = !raw || raw.length === 0;
+  const isDefault = !raw || raw.length === 0;
   const candidate = raw && raw.length > 0 ? raw : DEFAULT_REPO;
   // Normalize a full GitHub URL down to "owner/name".
   const normalized = candidate
@@ -177,11 +179,11 @@ function resolveRepo(): { owner: string; repo: string; isPlaceholder: boolean } 
     .replace(/\/+$/, "");
   const parts = normalized.split("/").filter((p) => p.length > 0);
   if (parts.length !== 2 || !parts[0] || !parts[1]) {
-    log(`WARNING: COMPOSIO_GITHUB_REPO="${raw}" is not "owner/name" or a github.com URL; using placeholder ${DEFAULT_REPO}.`);
+    log(`WARNING: COMPOSIO_GITHUB_REPO="${raw}" is not "owner/name" or a github.com URL; using default ${DEFAULT_REPO}.`);
     const [o, r] = DEFAULT_REPO.split("/") as [string, string];
-    return { owner: o, repo: r, isPlaceholder: true };
+    return { owner: o, repo: r, isDefault: true };
   }
-  return { owner: parts[0], repo: parts[1], isPlaceholder };
+  return { owner: parts[0], repo: parts[1], isDefault };
 }
 
 /** A short, human-readable preview of the body for the degraded-mode payload block. */
@@ -286,21 +288,25 @@ function printDegraded(args: IssueArgs, derived: IssueDerived, userId: string, c
 
 async function main(): Promise<void> {
   const derived = buildIssue();
-  const { owner, repo, isPlaceholder } = resolveRepo();
+  const { owner, repo, isDefault } = resolveRepo();
   const userId = process.env.COMPOSIO_USER_ID?.trim() || "default";
   const connectedAccountId = process.env.COMPOSIO_CONNECTED_ACCOUNT_ID?.trim() || undefined;
   const args: IssueArgs = { owner, repo, title: derived.title, body: derived.body };
 
   log(`derived issue title: ${derived.title}`);
-  log(`target repo: ${owner}/${repo}${isPlaceholder ? " (PLACEHOLDER — set COMPOSIO_GITHUB_REPO=owner/name)" : ""}`);
+  log(`target repo: ${owner}/${repo}${isDefault ? " (default — override with COMPOSIO_GITHUB_REPO=owner/name)" : ""}`);
 
   const apiKey = process.env.COMPOSIO_API_KEY?.trim();
   if (!apiKey) {
     return printDegraded(args, derived, userId, connectedAccountId, "COMPOSIO_API_KEY not set");
   }
-  if (isPlaceholder) {
+  if (isDefault) {
     return printDegraded(args, derived, userId, connectedAccountId,
-      "COMPOSIO_API_KEY set but COMPOSIO_GITHUB_REPO is a placeholder — refusing to file into a non-existent repo");
+      "COMPOSIO_API_KEY set but COMPOSIO_GITHUB_REPO is not set — set it explicitly to file a live issue");
+  }
+  if (repo !== ALLOWED_REPO_NAME) {
+    return printDegraded(args, derived, userId, connectedAccountId,
+      `target repo "${owner}/${repo}" is outside the allowlist — live issues may only be filed into a repo named "${ALLOWED_REPO_NAME}"`);
   }
 
   // DRY-RUN — exercise the action path WITHOUT firing a live GitHub issue. Used by

@@ -453,11 +453,13 @@ async function readHistory(limit = 50): Promise<{ source: string; audits: Histor
 // ---------------------------------------------------------------------------
 const COMPOSIO_ACTION_SLUG = "GITHUB_CREATE_AN_ISSUE";
 const COMPOSIO_MAX_BODY = 60_000;
-const COMPOSIO_DEFAULT_REPO = "your-org/mcp-audit-reports-PLACEHOLDER";
+const COMPOSIO_DEFAULT_REPO = "bishnubista/mcp-audit-reports";
+// Safety rail: live issues may ONLY be filed into a repo with this name.
+const COMPOSIO_ALLOWED_REPO_NAME = "mcp-audit-reports";
 
-function resolveComposioRepo(): { owner: string; repo: string; isPlaceholder: boolean } {
+function resolveComposioRepo(): { owner: string; repo: string; isDefault: boolean } {
   const raw = process.env.COMPOSIO_GITHUB_REPO?.trim();
-  const isPlaceholder = !raw || raw.length === 0;
+  const isDefault = !raw || raw.length === 0;
   const candidate = raw && raw.length > 0 ? raw : COMPOSIO_DEFAULT_REPO;
   const normalized = candidate
     .replace(/^https?:\/\/(www\.)?github\.com\//i, "")
@@ -466,9 +468,9 @@ function resolveComposioRepo(): { owner: string; repo: string; isPlaceholder: bo
   const parts = normalized.split("/").filter((p) => p.length > 0);
   if (parts.length !== 2 || !parts[0] || !parts[1]) {
     const [o, r] = COMPOSIO_DEFAULT_REPO.split("/") as [string, string];
-    return { owner: o, repo: r, isPlaceholder: true };
+    return { owner: o, repo: r, isDefault: true };
   }
-  return { owner: parts[0], repo: parts[1], isPlaceholder };
+  return { owner: parts[0], repo: parts[1], isDefault };
 }
 
 // Build the issue title/body from the audit's bounded report model (never raw
@@ -516,7 +518,7 @@ type FileIssueResult =
 // File the audit report as a GitHub issue via Composio. LIVE when a key + real
 // repo are present; otherwise returns a degraded preview payload. Never throws.
 async function fileIssueForAudit(st: AuditState): Promise<FileIssueResult> {
-  const { owner, repo, isPlaceholder } = resolveComposioRepo();
+  const { owner, repo, isDefault } = resolveComposioRepo();
   const userId = process.env.COMPOSIO_USER_ID?.trim() || "default";
   const connectedAccountId = process.env.COMPOSIO_CONNECTED_ACCOUNT_ID?.trim() || undefined;
   const { title, body } = buildComposioIssue(st);
@@ -550,8 +552,13 @@ async function fileIssueForAudit(st: AuditState): Promise<FileIssueResult> {
 
   const apiKey = process.env.COMPOSIO_API_KEY?.trim();
   if (!apiKey) return degraded("COMPOSIO_API_KEY not set");
-  if (isPlaceholder) {
-    return degraded("COMPOSIO_GITHUB_REPO is a placeholder — refusing to file into a non-existent repo");
+  if (isDefault) {
+    return degraded("COMPOSIO_GITHUB_REPO is not set — set it explicitly to file a live issue");
+  }
+  if (repo !== COMPOSIO_ALLOWED_REPO_NAME) {
+    return degraded(
+      `target repo "${owner}/${repo}" is outside the allowlist — live issues may only be filed into a repo named "${COMPOSIO_ALLOWED_REPO_NAME}"`,
+    );
   }
   if (process.env.COMPOSIO_DRY_RUN === "1") {
     return degraded("COMPOSIO_DRY_RUN — built and validated the tool-call without filing a live issue");
@@ -808,7 +815,7 @@ const X402_VERSION = 1 as const;
 const PRICE_ATOMIC = "100000"; // $0.10 USDC (6 decimals), matches x402 server default
 const NETWORK = process.env.X402_NETWORK ?? "base-sepolia";
 const PAY_TO =
-  process.env.PAY_TO_ADDRESS ?? "0x0000000000000000000000000000000000000402";
+  process.env.PAY_TO_ADDRESS ?? "0x8430154a89111f27cd1bb2f1a3f81961b04391a8";
 const USDC_ASSET = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"; // base-sepolia USDC
 
 function paymentRequirements(resource: string) {

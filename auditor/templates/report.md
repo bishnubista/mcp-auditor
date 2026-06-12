@@ -49,7 +49,7 @@
 
 ## References
 
-- [SAFE-MCP Framework (SAFE-T taxonomy)](https://github.com/SAFE-MCP/safe-mcp)
+- [SAF-MCP Framework (SAFE-T taxonomy)](https://github.com/secure-agentic-framework/saf-mcp)
 - [OWASP LLM Top 10 (2025)](https://genai.owasp.org/resource/owasp-top-10-for-llm-applications-2025/)
 - [OWASP Agentic Top 10 (2026)](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/)
 
