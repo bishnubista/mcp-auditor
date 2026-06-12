@@ -19,6 +19,10 @@
 //     each audit entry into that session:
 //       POST  ${GUILD_API_URL}/sessions/${GUILD_SESSION_ID}/events
 //       Body: { mode: "json", content: { projectId, source, event } }
+//     Some sessions reject later writes, so the current live demo path uses
+//     GUILD_CONTEXT_SINK=1 to create draft workspace context versions instead:
+//       POST  ${GUILD_API_URL}/workspaces/${GUILD_PROJECT_ID}/contexts
+//       Body: { status: "DRAFT", context: markdown, summary: string }
 //   - Fallback assumed REST contract (one-line change if the real endpoint exists):
 //       POST  ${GUILD_API_URL}/audit
 //       Headers: Authorization: Bearer ${GUILD_API_KEY}
@@ -40,6 +44,7 @@ export interface GuildConfig {
   apiUrl?: string;
   projectId?: string;
   sessionId?: string;
+  contextSink?: boolean;
 }
 
 // Guild CLI `doctor` reports this as the current API server.
@@ -54,6 +59,7 @@ export class GuildGovernance implements GovernanceBackend {
   private readonly apiUrl: string;
   private readonly projectId: string | undefined;
   private readonly sessionId: string | undefined;
+  private readonly contextSink: boolean;
   // Mirror every event locally so the audit trail is never lost even if the
   // Guild network call is slow or fails.
   private readonly local: LocalGovernance;
@@ -70,6 +76,8 @@ export class GuildGovernance implements GovernanceBackend {
     ).replace(/\/+$/, "");
     this.projectId = config.projectId ?? process.env.GUILD_PROJECT_ID;
     this.sessionId = config.sessionId ?? process.env.GUILD_SESSION_ID;
+    this.contextSink =
+      config.contextSink ?? process.env.GUILD_CONTEXT_SINK === "1";
     this.local = localBackend;
   }
 
@@ -99,23 +107,25 @@ export class GuildGovernance implements GovernanceBackend {
   }
 
   private async sendToGuild(entry: AuditEntry): Promise<void> {
-    const url = this.sessionId
+    const url = this.contextSink && this.projectId
+      ? `${this.apiUrl}/workspaces/${encodeURIComponent(this.projectId)}/contexts`
+      : this.sessionId
       ? `${this.apiUrl}/sessions/${encodeURIComponent(this.sessionId)}/events`
       : `${this.apiUrl}${GUILD_AUDIT_PATH}`;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Authorization: `Bearer ${this.apiKey}`,
     };
-    if (this.projectId && !this.sessionId) headers["X-Guild-Project"] = this.projectId;
+    if (this.projectId && !this.sessionId && !this.contextSink) {
+      headers["X-Guild-Project"] = this.projectId;
+    }
 
     const event = {
       projectId: this.projectId ?? null,
       source: "mcp-auditor",
       event: entry,
     };
-    const body = JSON.stringify(
-      this.sessionId ? { mode: "json", content: event } : event,
-    );
+    const body = JSON.stringify(this.requestBody(entry, event));
 
     // On-stage "governance is live" proof: show exactly what is being shipped.
     console.log(
@@ -144,5 +154,22 @@ export class GuildGovernance implements GovernanceBackend {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  private requestBody(entry: AuditEntry, event: unknown): unknown {
+    if (this.contextSink && this.projectId) {
+      const pretty = JSON.stringify(event, null, 2);
+      return {
+        status: "DRAFT",
+        summary: `MCP audit event ${entry.safeT} ${entry.verdict}`,
+        context:
+          `# MCP Auditor Governance Event\n\n` +
+          `\`\`\`json\n${pretty}\n\`\`\`\n`,
+      };
+    }
+    if (this.sessionId) {
+      return { mode: "json", content: event };
+    }
+    return event;
   }
 }

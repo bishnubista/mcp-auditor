@@ -50,6 +50,41 @@ export interface ProberResult {
   finding?: Finding;
 }
 
+// ── UI1 streaming hook (ADDITIVE) ──────────────────────────────────────────
+// runProbers can OPTIONALLY emit per-agent lifecycle events for the live SSE
+// stream (PLAN-UI.md §5). The runner emits RAW typed events; the SSE server
+// (audit-stream-server.ts) stamps auditId/runId/seq/id/ts and wraps them into
+// the wire envelope. Keeping the runner ignorant of seq/id keeps the demo:local
+// path byte-identical when onEvent is absent (the gate must stay green).
+//
+// Emitted types (terminal per-agent state is agent.done OR agent.error):
+//   agent.start   { agentId, safeT, tool }
+//   agent.gate    { agentId, verdict:"allowed" }   (only emitted when allowed)
+//   agent.finding { agentId, safeT, tool, severity, evidenceExcerpt }
+//   agent.clean   { agentId, tool }                (negative control / no finding)
+//   agent.done    { agentId, ms }                  (terminal)
+//   agent.error   { agentId, message }             (terminal)
+export type RunnerAgentEvent =
+  | { type: "agent.start"; agentId: string; safeT: string; tool: string }
+  | { type: "agent.gate"; agentId: string; verdict: "allowed" | "denied" }
+  | {
+      type: "agent.finding";
+      agentId: string;
+      safeT: string;
+      tool: string;
+      severity: string;
+      evidenceExcerpt: string;
+    }
+  | { type: "agent.clean"; agentId: string; tool: string }
+  | { type: "agent.done"; agentId: string; ms: number }
+  | { type: "agent.error"; agentId: string; message: string };
+
+export type RunnerOnEvent = (e: RunnerAgentEvent) => void;
+
+// No-op emitter so the hot path never branches on undefined and behavior is
+// IDENTICAL to the pre-streaming runner when no consumer is attached.
+const noopEmit: RunnerOnEvent = () => {};
+
 function descriptionFor(tools: ToolInfo[], name: string): string {
   return tools.find((t) => t.name === name)?.description ?? "";
 }
@@ -81,8 +116,27 @@ async function runOneProber(
   tools: ToolInfo[],
   callTool: CallToolFn,
   policy: ProbePolicy,
+  emit: RunnerOnEvent,
 ): Promise<ProberResult> {
   console.error(`[${cls.prober}] START — ${cls.safeT} → ${cls.tool}`);
+  // Logical per-agent duration. Date.now() is fine in the Bun runtime; if it is
+  // ever restricted this still degrades to ms:0 without throwing.
+  const startedAt = (() => {
+    try {
+      return Date.now();
+    } catch {
+      return 0;
+    }
+  })();
+  const elapsed = (): number => {
+    try {
+      return Math.max(0, Date.now() - startedAt);
+    } catch {
+      return 0;
+    }
+  };
+
+  emit({ type: "agent.start", agentId: cls.prober, safeT: cls.safeT, tool: cls.tool });
 
   const req: ProbeRequest = {
     agent: cls.prober,
@@ -92,58 +146,85 @@ async function runOneProber(
     payload: cls.payload,
   };
 
-  // THE ONLY permitted tool-call path — governance gate + audit on every probe.
-  const verdict = await executeProbe(req, callTool, policy);
+  try {
+    // THE ONLY permitted tool-call path — governance gate + audit on every probe.
+    const verdict = await executeProbe(req, callTool, policy);
 
-  if (verdict.verdict === "denied") {
-    console.error(`[${cls.prober}] DENIED by governance: ${verdict.reason}`);
-    return {
-      prober: cls.prober,
-      safeT: cls.safeT,
-      tool: cls.tool,
-      isFinding: false,
-      verdict: "denied",
+    if (verdict.verdict === "denied") {
+      console.error(`[${cls.prober}] DENIED by governance: ${verdict.reason}`);
+      emit({ type: "agent.gate", agentId: cls.prober, verdict: "denied" });
+      // A denied probe is a terminal per-agent state too (no finding possible).
+      emit({ type: "agent.error", agentId: cls.prober, message: `denied: ${verdict.reason}` });
+      return {
+        prober: cls.prober,
+        safeT: cls.safeT,
+        tool: cls.tool,
+        isFinding: false,
+        verdict: "denied",
+      };
+    }
+
+    // Governance allowed the probe.
+    emit({ type: "agent.gate", agentId: cls.prober, verdict: "allowed" });
+
+    const responseText = resultText(verdict.result as ToolCallResult);
+    const ctx: ProbeContext = {
+      responseText,
+      toolDescription: descriptionFor(tools, cls.tool),
     };
-  }
+    const hit = cls.detect(ctx);
 
-  const responseText = resultText(verdict.result as ToolCallResult);
-  const ctx: ProbeContext = {
-    responseText,
-    toolDescription: descriptionFor(tools, cls.tool),
-  };
-  const hit = cls.detect(ctx);
+    if (!hit) {
+      console.error(`[${cls.prober}] no finding (clean) — ${cls.tool}`);
+      emit({ type: "agent.clean", agentId: cls.prober, tool: cls.tool });
+      emit({ type: "agent.done", agentId: cls.prober, ms: elapsed() });
+      return {
+        prober: cls.prober,
+        safeT: cls.safeT,
+        tool: cls.tool,
+        isFinding: false,
+        verdict: "allowed",
+      };
+    }
 
-  if (!hit) {
-    console.error(`[${cls.prober}] no finding (clean) — ${cls.tool}`);
+    const finding: Finding = {
+      ts: new Date().toISOString(),
+      safeT: cls.safeT,
+      tool: cls.tool,
+      severity: hit.severity,
+      probe: cls.probe,
+      evidence: hit.evidence,
+      prober: cls.prober,
+    };
+    console.error(
+      `[${cls.prober}] FINDING (${hit.severity}) ${cls.safeT} ${cls.tool} :: ${cls.probe}`,
+    );
+    emit({
+      type: "agent.finding",
+      agentId: cls.prober,
+      safeT: cls.safeT,
+      tool: cls.tool,
+      severity: hit.severity,
+      // Evidence is UNTRUSTED target output — the server escapes+truncates it
+      // again before it reaches any client; we pass the runner's short excerpt.
+      evidenceExcerpt: hit.evidence,
+    });
+    emit({ type: "agent.done", agentId: cls.prober, ms: elapsed() });
     return {
       prober: cls.prober,
       safeT: cls.safeT,
       tool: cls.tool,
-      isFinding: false,
+      isFinding: true,
       verdict: "allowed",
+      finding,
     };
+  } catch (err) {
+    // Any unexpected throw is a TERMINAL agent.error so the stream never hangs.
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[${cls.prober}] ERROR — ${message}`);
+    emit({ type: "agent.error", agentId: cls.prober, message });
+    throw err;
   }
-
-  const finding: Finding = {
-    ts: new Date().toISOString(),
-    safeT: cls.safeT,
-    tool: cls.tool,
-    severity: hit.severity,
-    probe: cls.probe,
-    evidence: hit.evidence,
-    prober: cls.prober,
-  };
-  console.error(
-    `[${cls.prober}] FINDING (${hit.severity}) ${cls.safeT} ${cls.tool} :: ${cls.probe}`,
-  );
-  return {
-    prober: cls.prober,
-    safeT: cls.safeT,
-    tool: cls.tool,
-    isFinding: true,
-    verdict: "allowed",
-    finding,
-  };
 }
 
 /**
@@ -196,7 +277,12 @@ export async function runProbers(
   tools: ToolInfo[],
   callTool: CallToolFn,
   policy: ProbePolicy,
+  onEvent?: RunnerOnEvent,
 ): Promise<ProberResult[]> {
+  // ADDITIVE: optional live-event emitter (UI1 SSE). Absent -> no-op -> the
+  // demo:local / orchestrator path is byte-identical to before.
+  const emit = onEvent ?? noopEmit;
+
   // #2 Assert the catalog is intact BEFORE running (non-tautological).
   assertCatalogIntegrity();
 
@@ -224,7 +310,7 @@ export async function runProbers(
   // The "multi-agent" moment: all specialists probe concurrently. Each probe goes
   // EXCLUSIVELY through the governance funnel (executeProbe inside runOneProber).
   const results = await Promise.all(
-    PROBE_CLASSES.map((c) => runOneProber(c, tools, callTool, policy)),
+    PROBE_CLASSES.map((c) => runOneProber(c, tools, callTool, policy, emit)),
   );
 
   // #2 Post-run catalog proof (non-tautological): EXACTLY EXPECTED_PROBE_COUNT

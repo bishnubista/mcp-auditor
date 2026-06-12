@@ -11,6 +11,7 @@
     "publish:cited": "bun run src/actions/cited.ts",
     "dashboard": "bun run src/store/clickhouse.ts",
     "serve:x402": "bun run src/service/x402-audit-server.ts",
+    "serve:stream": "bun run src/service/audit-stream-server.ts",
     "typecheck": "bunx tsc --noEmit"
   },
   "devDependencies": {
