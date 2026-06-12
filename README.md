@@ -7,6 +7,10 @@ in the SAFE-MCP technique catalog.
 
 Built for the **Context Engineering Challenge — "agents that act on the web."**
 
+📄 **Published audit:** [`cited.md`](./cited.md) — the agent's citation-grounded MCP
+security report, with an on-chain **x402** settlement (0.1 USDC on Base Sepolia,
+[verifiable tx](https://sepolia.basescan.org/tx/0xda0c5b5b77067f87988f36aca33aa78ef7b806a76ea26e54d4de52c9a8302f12)).
+
 ---
 
 ## What it does (end to end)
