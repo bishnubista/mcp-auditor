@@ -1,0 +1,25 @@
+# render.yaml — Render Blueprint for the seeded vulnerable target MCP server.
+#
+# Deploys the Streamable HTTP entrypoint (src/http.ts) as a public web service so the
+# auditor can probe it at a real URL. ADDITIVE: the localhost stdio demo:local pipeline
+# is unaffected by this file.
+#
+# Runtime: Docker (bun is not a native Render env), built from ./Dockerfile.
+# Render injects $PORT — src/http.ts binds to it. Health check hits GET /health.
+#
+# Deploy: Render Dashboard → New → Blueprint → point at this repo. Render reads this file
+# (rootDir scopes it to the target-server subdirectory). See DEPLOY.md.
+
+services:
+  - type: web
+    name: seeded-vulnerable-target
+    runtime: docker
+    plan: starter
+    rootDir: mcp-auditor/target-server
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeploy: false
+    envVars:
+      # Render sets PORT automatically; declared here for clarity. src/http.ts reads it.
+      - key: PORT
+        value: 8787

@@ -4,6 +4,7 @@
     "": {
       "name": "auditor",
       "dependencies": {
+        "@clickhouse/client": "^1.20.0",
         "@composio/core": "^0.10.0",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "zod": "^4.4.3",
@@ -17,6 +18,10 @@
     },
   },
   "packages": {
+    "@clickhouse/client": ["@clickhouse/client@1.20.0", "", { "dependencies": { "@clickhouse/client-common": "1.20.0" } }, "sha512-LfHZ9bZZhc7KrNFVa9v73JMqwsP+m/5SgwdKMmxze4Urcw6pE0F7RNog3Lzx3GKRnJr3Hd15uDlIbqaDa9BbgA=="],
+
+    "@clickhouse/client-common": ["@clickhouse/client-common@1.20.0", "", {}, "sha512-s0oDSwxQyJO/Xwne6sNE7xTAlms72Hq2AHzHAB9oSOBfiaXTzQOyHQrhufJ9ldPJTwr4L47/RxG1i6I0I8Xy9A=="],
+
     "@composio/client": ["@composio/client@0.1.0-alpha.72", "", {}, "sha512-2WYXgdlMvhoaJCsaSfyMAYGQ2tS5l2Fqdh2cMRqNi8NybIoOkFZy2ApBJJOoQwqfpUr41VymMW6FtiNQm7JavQ=="],
 
     "@composio/core": ["@composio/core@0.10.0", "", { "dependencies": { "@composio/client": "0.1.0-alpha.72", "@composio/json-schema-to-zod": "0.1.20", "@types/json-schema": "^7.0.15", "chalk": "^4.1.2", "openai": "^6.16.0", "pusher-js": "^8.4.0", "semver": "^7.7.2", "zod-to-json-schema": "^3.25.1" }, "peerDependencies": { "zod": "^3.25 || ^4" } }, "sha512-dG2BKF4NRiE8HHDzWLLgjMMo3FU4NJ6SxR961EpdLWWEKhkl+yP/mZlIN7p/4WnCR/fuDBKH1Qh+7kBdcHmEHA=="],
