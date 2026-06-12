@@ -44,6 +44,8 @@ const tmp = mkdtempSync(join(tmpdir(), "guild-test-"));
       // RFC 5737 TEST-NET-1 — guaranteed-unroutable so the POST times out/fails.
       apiUrl: "http://192.0.2.1:9/v1",
       projectId: "hackathon-demo",
+      sessionId: "",
+      contextSink: false,
     },
     local,
   );
@@ -66,7 +68,10 @@ const tmp = mkdtempSync(join(tmpdir(), "guild-test-"));
 {
   const auditPath = join(tmp, "audit-nokey.jsonl");
   const local = new LocalGovernance(auditPath);
-  const guild = new GuildGovernance({ apiKey: undefined }, local);
+  const guild = new GuildGovernance(
+    { apiKey: "", sessionId: "", contextSink: false },
+    local,
+  );
   let threw = false;
   try {
     guild.audit(entry);

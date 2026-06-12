@@ -1,0 +1,152 @@
+@import "tailwindcss";
+
+/* MCP Auditor — security / terminal aesthetic.
+   Deep slate canvas, phosphor-green primary, amber/red severity signals,
+   monospace data, hairline borders. No purple gradients. */
+
+@theme {
+  --color-canvas: #070b10;
+  --color-panel: #0c1218;
+  --color-panel-2: #0f1822;
+  --color-line: #1b2733;
+  --color-line-bright: #294056;
+
+  --color-ink: #e3edf3;
+  --color-ink-dim: #8aa0b0;
+  --color-ink-faint: #56707f;
+
+  --color-phosphor: #36f0a6;
+  --color-phosphor-dim: #1f8f63;
+  --color-cyan: #4fd6ff;
+  --color-amber: #ffb347;
+  --color-rose: #ff5d6c;
+
+  --color-sev-critical: #ff4d5e;
+  --color-sev-high: #ff8a3d;
+  --color-sev-medium: #ffd152;
+  --color-sev-low: #6fd3ff;
+  --color-sev-info: #8aa0b0;
+
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code",
+    Menlo, Consolas, monospace;
+}
+
+html,
+body {
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+}
+
+body {
+  font-family: var(--font-mono);
+  -webkit-font-smoothing: antialiased;
+  /* faint grid + scanline texture for the terminal feel */
+  background-image:
+    linear-gradient(var(--color-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-line) 1px, transparent 1px);
+  background-size: 44px 44px;
+  background-position: -1px -1px;
+  background-attachment: fixed;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      120% 80% at 50% -10%,
+      rgba(54, 240, 166, 0.08),
+      transparent 60%
+    );
+  z-index: 0;
+}
+
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(54, 240, 166, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(54, 240, 166, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(54, 240, 166, 0);
+  }
+}
+
+@keyframes scan {
+  0% {
+    transform: translateY(-100%);
+  }
+  100% {
+    transform: translateY(220%);
+  }
+}
+
+@keyframes blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0.25;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.scanline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 28%;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    rgba(54, 240, 166, 0.12),
+    transparent
+  );
+  animation: scan 1.6s linear infinite;
+}
+
+.cursor-blink {
+  animation: blink 1s step-end infinite;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--color-line-bright);
+  border-top-color: var(--color-phosphor);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+.pulse-ring {
+  animation: pulse-ring 1.6s ease-out infinite;
+}
+
+::selection {
+  background: rgba(54, 240, 166, 0.3);
+  color: #fff;
+}
+
+/* thin scrollbars for the log */
+.thin-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: var(--color-line-bright);
+  border-radius: 4px;
+}
+.thin-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
