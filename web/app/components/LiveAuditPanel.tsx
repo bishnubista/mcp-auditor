@@ -10,6 +10,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import {
   type AuditInput,
   type PaymentMode,
+  type PaymentRequired402,
   subscribeAudit,
   type Subscription,
   isMockMode,
@@ -55,6 +56,11 @@ export function LiveAuditPanel() {
   const [connError, setConnError] = useState<string | null>(null);
   // x402: set when POST /audits returns 402; the UI shows a pay affordance.
   const [paymentRequired, setPaymentRequired] = useState(false);
+  // Parsed 402 body (carries the Cash App accepts entry + one-shot note).
+  // Refreshed on every 402, so a stale-note retry auto-shows the new note.
+  const [payment402, setPayment402] = useState<PaymentRequired402 | undefined>(
+    undefined,
+  );
   const [paid, setPaid] = useState(false);
   // C1 render fell back to the static report (invalid spec / render error).
   const [c1Fallback, setC1Fallback] = useState(false);
@@ -109,9 +115,13 @@ export function LiveAuditPanel() {
             dispatch({ kind: "error", message });
           },
           onStarted: ({ streamToken: tok }) => setStreamToken(tok),
-          onPaymentRequired: () => {
+          onPaymentRequired: (body) => {
             // x402 gate hit — surface the pay affordance, not a hard error.
+            // Always store the fresh body: notes are one-shot, so a stale-note
+            // retry 402s again with a NEW note we must show.
             setRunning(false);
+            setPaid(false);
+            setPayment402(body);
             setPaymentRequired(true);
           },
         },
@@ -137,6 +147,25 @@ export function LiveAuditPanel() {
     startSubscription(lastInput, false, "demo");
   }, [lastInput, startSubscription]);
 
+  // Cash App accepts entry from the 402 body (defensive — may be absent).
+  const cashAccept = payment402?.accepts?.find((a) => a?.scheme === "cashapp");
+  const cashNote =
+    typeof cashAccept?.extra?.paymentNote === "string"
+      ? cashAccept.extra.paymentNote
+      : null;
+  const cashPayUrl =
+    typeof cashAccept?.extra?.payUrl === "string"
+      ? cashAccept.extra.payUrl
+      : null;
+  const cashTag = cashAccept?.payTo ?? "$mcpauditor";
+
+  // "I've sent it" — retry the audit with the cashapp note. If the note is
+  // stale, the backend 402s again and onPaymentRequired refreshes the panel.
+  const payCashAppAndRun = useCallback(() => {
+    if (!cashNote) return;
+    startSubscription(lastInput, false, { kind: "cashapp", note: cashNote });
+  }, [cashNote, lastInput, startSubscription]);
+
   const sourceLabel = mockMode || !hasBackend ? "MOCK STREAM" : "RENDER BACKEND";
 
   const showReport = state.status === "complete" && state.reportReady;
@@ -160,17 +189,74 @@ export function LiveAuditPanel() {
 
       {/* x402 pay affordance — shown when POST /audits returned 402. */}
       {paymentRequired && !paid && (
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-[var(--color-amber)] bg-[var(--color-panel)] px-4 py-3">
-          <span className="text-[12px] text-[var(--color-amber)]">
-            x402 · payment required to run this audit
-          </span>
-          <button
-            type="button"
-            onClick={payAndRun}
-            className="ml-auto inline-flex items-center gap-2 rounded bg-[var(--color-amber)] px-3 py-1.5 text-[12px] font-bold text-[#1a1206] transition-all hover:brightness-110"
-          >
-            Pay $0.10 to audit (demo)
-          </button>
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-3 rounded-lg border border-[var(--color-amber)] bg-[var(--color-panel)] px-4 py-3">
+            <span className="text-[12px] text-[var(--color-amber)]">
+              x402 · payment required to run this audit
+            </span>
+            <button
+              type="button"
+              onClick={payAndRun}
+              className="ml-auto inline-flex items-center gap-2 rounded bg-[var(--color-amber)] px-3 py-1.5 text-[12px] font-bold text-[#1a1206] transition-all hover:brightness-110"
+            >
+              Pay $0.10 to audit (demo)
+            </button>
+          </div>
+
+          {/* Cash App pay panel — rendered when the 402 offers a cashapp scheme */}
+          {cashAccept && cashNote && (
+            <div className="rounded-lg border border-[#00D632] bg-[var(--color-panel)] px-4 py-4">
+              <h3 className="text-[13px] font-bold tracking-wide text-[#00D632]">
+                Pay with Cash App
+              </h3>
+              <div className="mt-3 flex flex-wrap items-start gap-5">
+                {cashPayUrl && (
+                  /* eslint-disable-next-line @next/next/no-img-element -- external zero-dep QR for demo */
+                  <img
+                    src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(cashPayUrl)}`}
+                    alt={`Cash App QR code for ${cashTag}`}
+                    width={180}
+                    height={180}
+                    className="rounded border border-[var(--color-line)] bg-white"
+                  />
+                )}
+                <div className="min-w-[240px] flex-1 space-y-2 text-[12px]">
+                  <p className="text-[var(--color-ink-dim)]">
+                    Send{" "}
+                    <span className="font-bold text-[#00D632]">$0.10</span> to{" "}
+                    <span className="font-mono font-bold text-[#00D632]">
+                      {cashTag}
+                    </span>
+                  </p>
+                  {cashPayUrl && (
+                    <p>
+                      <a
+                        href={cashPayUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-mono text-[11px] text-[#00D632] underline underline-offset-2 hover:brightness-110"
+                      >
+                        {cashPayUrl}
+                      </a>
+                    </p>
+                  )}
+                  <p className="text-[11px] text-[var(--color-ink-faint)]">
+                    Include this note with your Cash App payment:
+                  </p>
+                  <code className="block w-fit select-all rounded border border-[#00D632] bg-[#00D632]/10 px-3 py-2 font-mono text-[14px] font-bold tracking-wider text-[#00D632]">
+                    {cashNote}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={payCashAppAndRun}
+                    className="mt-2 inline-flex items-center gap-2 rounded bg-[#00D632] px-3 py-1.5 text-[12px] font-bold text-[#062e12] transition-all hover:brightness-110"
+                  >
+                    I&apos;ve sent it — unlock audit
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

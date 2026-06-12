@@ -15,12 +15,31 @@ export interface AuditInput {
   endpoint: string;
 }
 
+// Loose, defensive shape of the x402 402 response body. All fields optional —
+// the UI must tolerate anything the backend sends.
+export interface PaymentAccept {
+  scheme?: string;
+  network?: string;
+  maxAmountRequired?: string;
+  payTo?: string;
+  description?: string;
+  asset?: string;
+  extra?: { paymentNote?: string; payUrl?: string; [k: string]: unknown };
+}
+
+export interface PaymentRequired402 {
+  x402Version?: number;
+  error?: string;
+  accepts?: PaymentAccept[];
+}
+
 export interface SubscribeCallbacks {
   onEvent: (ev: AuditEvent) => void;
   onError: (message: string) => void;
   // Called when POST /audits returns 402 (x402 gate). The UI shows a pay
   // affordance; retrying with `payment: "demo"` sends X-PAYMENT: demo.
-  onPaymentRequired?: () => void;
+  // `body` is the parsed 402 JSON (undefined if it failed to parse).
+  onPaymentRequired?: (body?: PaymentRequired402) => void;
   // Called once the backend audit is minted (real path only). Lets the UI keep
   // the streamToken for token-authed follow-up calls (e.g. file-issue).
   onStarted?: (info: { auditId: string; streamToken: string }) => void;
@@ -31,8 +50,10 @@ export interface Subscription {
 }
 
 // Payment mode for a backend audit. `demo` sends the X-PAYMENT: demo header
-// (demo-mode acceptance per PLAN-UI §3). `undefined` = unpaid (may 402).
-export type PaymentMode = "demo" | undefined;
+// (demo-mode acceptance per PLAN-UI §3). `{ kind: "cashapp", note }` sends an
+// x402 cashapp payload referencing the one-shot payment note from the 402.
+// `undefined` = unpaid (may 402).
+export type PaymentMode = "demo" | { kind: "cashapp"; note: string } | undefined;
 
 const EVENT_TYPES: EventType[] = [
   "audit.start",
@@ -104,6 +125,17 @@ export function subscribeBackend(
       // x402: demo-mode payment is negotiated ONLY here, in POST /audits
       // (never on the SSE GET) — PLAN-UI §4.
       if (payment === "demo") headers["X-PAYMENT"] = "demo";
+      else if (payment && payment.kind === "cashapp") {
+        // x402 cashapp scheme: base64(JSON) referencing the one-shot note.
+        headers["X-PAYMENT"] = btoa(
+          JSON.stringify({
+            x402Version: 1,
+            scheme: "cashapp",
+            network: "cashapp",
+            payload: { note: payment.note, payerCashtag: "" },
+          }),
+        );
+      }
 
       const res = await fetch(`${base}/audits`, {
         method: "POST",
@@ -114,8 +146,18 @@ export function subscribeBackend(
         }),
       });
       if (res.status === 402) {
-        // Surface a pay affordance instead of a hard error.
-        if (cb.onPaymentRequired) cb.onPaymentRequired();
+        // Surface a pay affordance instead of a hard error. Parse the x402
+        // body defensively — pass undefined if it isn't valid JSON.
+        let body402: PaymentRequired402 | undefined;
+        try {
+          const parsed = (await res.json()) as unknown;
+          if (parsed && typeof parsed === "object") {
+            body402 = parsed as PaymentRequired402;
+          }
+        } catch {
+          body402 = undefined;
+        }
+        if (cb.onPaymentRequired) cb.onPaymentRequired(body402);
         else cb.onError("payment required (x402) — backend returned 402");
         return;
       }
