@@ -101,10 +101,11 @@ const PRICE = process.env.X402_PRICE ?? "$0.10";
 // EVM network for the payment (x402 "exact" scheme). base-sepolia = free testnet.
 const NETWORK = process.env.X402_NETWORK ?? "base-sepolia";
 
-// Recipient address. Demo placeholder (NOT a real treasury) — override in prod.
+// Recipient address. Demo testnet recipient (NOT a funded treasury) — override
+// with PAY_TO_ADDRESS in prod.
 const PAY_TO =
   process.env.PAY_TO_ADDRESS ??
-  "0x0000000000000000000000000000000000000402";
+  "0x8430154a89111f27cd1bb2f1a3f81961b04391a8";
 
 // Default facilitator that exposes POST /verify + /settle. The reference x402
 // testnet facilitator. Only contacted on the PAID path, never for the 402.
