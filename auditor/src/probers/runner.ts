@@ -359,6 +359,10 @@ export async function runProbers(
 
 // Build a governance policy scoped to exactly the tools the probers will touch
 // on the given server. Helper so the orchestrator stays a one-liner.
+//
+// Each call mints FRESH rate-cap counters: callers (orchestrator, stream server)
+// build one policy per audit, so every audit — concurrent or sequential in the
+// same long-lived process — starts with a full maxProbesPerTool budget.
 export function buildPolicy(serverId: string, tools: ToolInfo[]): ProbePolicy {
   const toolNames = new Set(tools.map((t) => t.name));
   const probedTools = [
@@ -370,6 +374,7 @@ export function buildPolicy(serverId: string, tools: ToolInfo[]): ProbePolicy {
     allowedServers: [serverId],
     allowedTools: probedTools,
     maxProbesPerTool: 10,
+    counters: new Map(), // per-run budget — never shared across audits
   };
 }
 

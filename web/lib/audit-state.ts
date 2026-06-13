@@ -55,6 +55,9 @@ export interface AuditState {
   // Generative report (PLAN-UI §7). Set by the report.ready event. Null until
   // it arrives; the static report still renders from `findings` meanwhile.
   report: ReportState | null;
+  // TERMINAL audit-level failure (audit.error). `message` is UNTRUSTED backend
+  // text — render as plain text only. Null unless the audit was refused/aborted.
+  auditError: { message: string; code: string | null } | null;
   // de-dup guard across the whole audit: highest global seq seen.
   maxSeq: number;
   seenSeq: Set<number>;
@@ -97,6 +100,7 @@ export function initialState(): AuditState {
     findings: [],
     reportReady: false,
     report: null,
+    auditError: null,
     maxSeq: -1,
     seenSeq: new Set<number>(),
   };
@@ -120,6 +124,8 @@ function logLine(ev: AuditEvent): string {
       return `${ev.agentId} error: ${ev.message}`;
     case "audit.complete":
       return `audit complete — ${ev.findings.length} finding(s)`;
+    case "audit.error":
+      return `audit failed${ev.code ? ` [${ev.code}]` : ""}: ${ev.message}`;
     case "report.ready":
       return `report ready — ${ev.mode === "c1" ? "generative (C1)" : "static"} renderer`;
     default:
@@ -227,6 +233,31 @@ export function applyEvent(state: AuditState, ev: AuditEvent): AuditState {
         findings: ev.findings,
         reportReady: ev.reportReady,
       };
+
+    case "audit.error": {
+      // TERMINAL: the run is over. Any agent still spinning settles to its
+      // error phase so no card is left "probing" forever.
+      const agents: Record<string, AgentCardState> = { ...next.agents };
+      for (const id of Object.keys(agents)) {
+        const a = agents[id];
+        if (a.phase === "probing") {
+          agents[id] = {
+            ...a,
+            phase: "error",
+            errorMessage: a.errorMessage ?? "audit aborted",
+            lastSeq: Math.max(a.lastSeq, ev.seq),
+          };
+        }
+      }
+      return {
+        ...next,
+        status: "error",
+        auditId: next.auditId ?? ev.auditId,
+        runId: next.runId ?? ev.runId,
+        agents,
+        auditError: { message: ev.message, code: ev.code ?? null },
+      };
+    }
 
     case "report.ready":
       return {

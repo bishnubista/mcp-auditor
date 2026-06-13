@@ -88,12 +88,16 @@ export function LiveAuditPanel() {
 
   useEffect(() => () => stop(), [stop]);
 
-  // when the stream reaches a terminal state, mark not-running.
+  // when the stream reaches a terminal state, mark not-running. On a terminal
+  // error (e.g. audit.error) also close the subscription so the EventSource
+  // doesn't keep auto-reconnecting to a dead stream. (Not on "complete" —
+  // report.ready still arrives after audit.complete.)
   useEffect(() => {
     if (state.status === "complete" || state.status === "error") {
       setRunning(false);
+      if (state.status === "error") stop();
     }
-  }, [state.status]);
+  }, [state.status, stop]);
 
   const startSubscription = useCallback(
     (input: AuditInput, forceMock: boolean, payment: PaymentMode) => {
@@ -284,7 +288,30 @@ export function LiveAuditPanel() {
             </div>
           </div>
 
-          {connError && (
+          {/* terminal audit failure (audit.error) — the run is over. */}
+          {state.auditError && (
+            <div className="rounded-lg border border-[var(--color-amber)] bg-[var(--color-panel)] px-4 py-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[11px] font-bold uppercase tracking-widest text-[var(--color-amber)]">
+                  audit failed
+                </span>
+                {state.auditError.code && (
+                  <span className="rounded border border-[var(--color-amber)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-amber)]">
+                    {state.auditError.code}
+                  </span>
+                )}
+              </div>
+              {/* UNTRUSTED backend text — plain-text children only (React escapes). */}
+              <p className="mt-1.5 whitespace-pre-wrap break-words font-mono text-[12px] text-[var(--color-ink-dim)]">
+                {state.auditError.message}
+              </p>
+              <p className="mt-1.5 text-[11px] text-[var(--color-ink-faint)]">
+                this run is over — adjust the target above and start a new audit
+              </p>
+            </div>
+          )}
+
+          {connError && !state.auditError && (
             <div className="rounded border border-[var(--color-amber)] bg-[var(--color-panel)] px-3 py-2 text-[12px] text-[var(--color-amber)]">
               connection: {connError}
             </div>

@@ -7,13 +7,12 @@
 
 import { readFileSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
-import { executeProbe, __resetProbeCounts } from "./index.ts";
+import { executeProbe } from "./index.ts";
 import type { ProbePolicy, AuditEntry } from "./index.ts";
 import { LocalGovernance } from "./local.ts";
 
 const AUDIT_PATH = resolve(import.meta.dir, "../../../out/audit.test.jsonl");
 rmSync(AUDIT_PATH, { force: true });
-__resetProbeCounts();
 
 const backend = new LocalGovernance(AUDIT_PATH);
 
@@ -27,6 +26,9 @@ const policy: ProbePolicy = {
   allowedServers: ["seeded-target"],
   allowedTools: ["read_file", "exec"],
   maxProbesPerTool: 3,
+  // Counters live on the policy (per-run scoping); a fresh Map here IS the
+  // reset that the old module-level __resetProbeCounts() used to provide.
+  counters: new Map(),
 };
 
 const results: { name: string; pass: boolean; detail: string }[] = [];

@@ -12,6 +12,7 @@ const TYPE_COLOR: Record<string, string> = {
   "agent.done": "var(--color-ink-faint)",
   "agent.error": "var(--color-amber)",
   "audit.complete": "var(--color-cyan)",
+  "audit.error": "var(--color-amber)",
 };
 
 export function AuditTrail({ log }: { log: LogEntry[] }) {

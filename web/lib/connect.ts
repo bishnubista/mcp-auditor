@@ -64,6 +64,7 @@ const EVENT_TYPES: EventType[] = [
   "agent.done",
   "agent.error",
   "audit.complete",
+  "audit.error",
   "report.ready",
 ];
 

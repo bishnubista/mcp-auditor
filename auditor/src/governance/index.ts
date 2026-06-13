@@ -20,6 +20,15 @@ export interface ProbePolicy {
   allowedServers: string[]; // explicit allowlist — deny anything else
   allowedTools: string[] | "*";
   maxProbesPerTool: number; // rate cap, e.g. 10
+  // Per-tool probe counters, keyed by `${serverId}::${tool}` so rate caps are
+  // scoped to a concrete target tool, not a tool name reused across servers.
+  // The Map LIVES ON THE POLICY (not at module level) so the rate-cap budget is
+  // scoped to one audit run: buildPolicy() mints a fresh Map per audit, which is
+  // what the long-lived stream server needs — concurrent and sequential audits
+  // in one process each get their own budget instead of starving on a global
+  // counter that never resets. Required (not optional) so the compiler forces
+  // every policy — including hand-built test policies — to carry its own budget.
+  counters: Map<string, number>;
 }
 
 export type CallToolFn = (tool: string, args: unknown) => Promise<unknown>;
@@ -46,15 +55,6 @@ export interface GovernanceBackend {
 }
 
 const defaultBackend: GovernanceBackend = new LocalGovernance();
-
-// Per-tool probe counters. Keyed by `${serverId}::${tool}` so rate caps are
-// scoped to a concrete target tool, not a tool name reused across servers.
-const probeCounts = new Map<string, number>();
-
-// Test-only: reset the in-memory rate-cap counters. Does NOT touch CallToolFn.
-export function __resetProbeCounts(): void {
-  probeCounts.clear();
-}
 
 async function sha256First12(payload: unknown): Promise<string> {
   const { createHash } = await import("node:crypto");
@@ -97,13 +97,14 @@ export async function executeProbe(
     return deny("tool-not-allowlisted");
   }
 
-  // 3. Per-tool rate cap.
+  // 3. Per-tool rate cap. Counters live on the policy (see ProbePolicy), so the
+  //    budget is per audit run — never shared across runs in one process.
   const key = `${req.serverId}::${req.tool}`;
-  const used = probeCounts.get(key) ?? 0;
+  const used = policy.counters.get(key) ?? 0;
   if (used >= policy.maxProbesPerTool) {
     return deny("rate-cap");
   }
-  probeCounts.set(key, used + 1);
+  policy.counters.set(key, used + 1);
 
   // 4. Allowed — AUDIT BEFORE DISPATCH (integrity invariant).
   //

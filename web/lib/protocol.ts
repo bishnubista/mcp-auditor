@@ -15,6 +15,7 @@ export type EventType =
   | "agent.done"
   | "agent.error"
   | "audit.complete"
+  | "audit.error"
   | "report.ready";
 
 export interface BaseEvent {
@@ -85,6 +86,15 @@ export interface AuditCompleteEvent extends BaseEvent {
   reportReady: true;
 }
 
+// TERMINAL audit-level failure (e.g. admission denied / remote targets
+// disabled). The run is over; no further events follow. `message` is
+// UNTRUSTED backend text — rendered as plain text ONLY, never HTML.
+export interface AuditErrorEvent extends BaseEvent {
+  type: "audit.error";
+  message: string;
+  code?: string; // e.g. "remote_disabled" | "admission_denied"
+}
+
 // ---- Bounded ReportModel (PLAN-UI §6 trust boundary) ----
 // Mirror of the backend's report-model.ts. The ONLY structured object that
 // crosses into C1 / the renderer. Evidence is already escaped + truncated +
@@ -129,6 +139,7 @@ export type AuditEvent =
   | AgentDoneEvent
   | AgentErrorEvent
   | AuditCompleteEvent
+  | AuditErrorEvent
   | ReportReadyEvent;
 
 // ---- The 6 SAFE-T probers (deterministic catalog) ----
